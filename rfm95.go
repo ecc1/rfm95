@@ -132,80 +132,12 @@ const (
 	RegPll         = 0x70 // Control of the PLL bandwidth
 )
 
-// RFConfiguration represents (most of) the radio's configuration registers.
-type RFConfiguration struct {
-	// Omit RegFifo to avoid reading or writing it with this struct.
-	RegOpMode         byte // Operating mode & LoRa / FSK selection
-	RegBitrateMsb     byte // Bit Rate setting, Most Significant Bits
-	RegBitrateLsb     byte // Bit Rate setting, Least Significant Bits
-	RegFdevMsb        byte // Frequency Deviation setting, Most Significant Bits
-	RegFdevLsb        byte // Frequency Deviation setting, Least Significant Bits
-	RegFrfMsb         byte // RF Carrier Frequency, Most Significant Bits
-	RegFrfMid         byte // RF Carrier Frequency, Intermediate Bits
-	RegFrfLsb         byte // RF Carrier Frequency, Least Significant Bits
-	RegPaConfig       byte // PA selection and Output Power control
-	RegPaRamp         byte // Control of the PA ramp time, low phase noise PLL
-	RegOcp            byte // Over Current Protection control
-	RegLna            byte // LNA settings
-	RegRxConfig       byte // AFC, AGC, ctrl
-	RegRssiConfig     byte // RSSI-related settings
-	RegRssiCollision  byte // RSSI Collision detector
-	RegRssiThresh     byte // RSSI Threshold control
-	RegRssiValue      byte // RSSI value in dBm
-	RegRxBw           byte // Channel Filter BW Control
-	RegAfcBw          byte // AFC Channel Filter BW
-	RegOokPeak        byte // OOK demodulator selection and control in peak mode
-	RegOokFix         byte // Fixed threshold control of the OOK demodulator
-	RegOokAvg         byte // Average threshold control of the OOK demodulator
-	reserved17        byte
-	reserved18        byte
-	reserved19        byte
-	RegAfcFei         byte // AFC and FEI control
-	RegAfcMsb         byte // Frequency correction value of the AFC (MSB)
-	RegAfcLsb         byte // Frequency correction value of the AFC (LSB)
-	RegFeiMsb         byte // MSB of the calculated frequency error
-	RegFeiLsb         byte // LSB of the calculated frequency error
-	RegPreambleDetect byte // Settings of the Preamble Detector
-	RegRxTimeout1     byte // Timeout duration between Rx request and RSSI detection
-	RegRxTimeout2     byte // Timeout duration between RSSI detection and PayloadReady
-	RegRxTimeout3     byte // Timeout duration between RSSI detection and SyncAddress
-	RegRxDelay        byte // Delay between Rx cycles
-	RegOsc            byte // RF Oscillators Settings, CLK-OUT frequency
-	RegPreambleMsb    byte // Preamble length, MSB
-	RegPreambleLsb    byte // Preamble length, LSB
-	RegSyncConfig     byte // Sync Word Recognition control
-	RegSyncValue1     byte // Sync Word bytes, 1 through 8
-	RegSyncValue2     byte
-	RegSyncValue3     byte
-	RegSyncValue4     byte
-	RegSyncValue5     byte
-	RegSyncValue6     byte
-	RegSyncValue7     byte
-	RegSyncValue8     byte
-	RegPacketConfig1  byte // Packet mode settings
-	RegPacketConfig2  byte // Packet mode settings
-	RegPayloadLength  byte // Payload length setting
-	RegNodeAdrs       byte // Node address
-	RegBroadcastAdrs  byte // Broadcast address
-	RegFifoThresh     byte // Fifo threshold, Tx start condition
-	RegSeqConfig1     byte // Top level Sequencer settings
-	RegSeqConfig2     byte // Top level Sequencer settings
-	RegTimerResol     byte // Timer 1 and 2 resolution control
-	RegTimer1Coef     byte // Timer 1 setting
-	RegTimer2Coef     byte // Timer 2 setting
-	RegImageCal       byte // Image calibration engine control
-	RegTemp           byte // Temperature Sensor value
-	RegLowBat         byte // Low Battery Indicator Settings
-	RegIrqFlags1      byte // Status register: PLL Lock state, Timeout, RSSI
-	RegIrqFlags2      byte // Status register: FIFO handling flags, Low Battery
-	RegDioMapping1    byte // Mapping of pins DIO0 to DIO3
-	RegDioMapping2    byte // Mapping of pins DIO4 and DIO5, ClkOut frequency
-	RegVersion        byte // Hope RF ID relating the silicon revision
-}
+// Skip RegFifo to avoid burst mode access.
+const ConfigurationStart = RegOpMode
 
-// ResetRFConfiguration contains the register values after reset,
+// resetConfiguration contains the register values after reset,
 // according to data sheet section 6.
-var ResetRFConfiguration = RFConfiguration{
+var resetConfiguration = []byte{
 	RegOpMode:         0x01,
 	RegBitrateMsb:     0x1A,
 	RegBitrateLsb:     0x0B,
@@ -228,9 +160,9 @@ var ResetRFConfiguration = RFConfiguration{
 	RegOokPeak:        0x28,
 	RegOokFix:         0x0C,
 	RegOokAvg:         0x12,
-	reserved17:        0x47,
-	reserved18:        0x32,
-	reserved19:        0x3E,
+	0x17:              0x47, // reserved
+	0x18:              0x32, // reserved
+	0x19:              0x3E, // reserved
 	RegAfcFei:         0x00,
 	RegAfcMsb:         0x00,
 	RegAfcLsb:         0x00,
@@ -272,11 +204,17 @@ var ResetRFConfiguration = RFConfiguration{
 	RegDioMapping1:    0x00,
 	RegDioMapping2:    0x00,
 	RegVersion:        0x12,
+	// Omit additional registers to avoid undefined behavior.
 }
 
-// DefaultRFConfiguration contains the default (FSK) values,
+// ResetConfiguration returns a copy of the register values after reset.
+func ResetConfiguration() []byte {
+	return resetConfiguration[:]
+}
+
+// defaultConfiguration contains the default (FSK) values,
 // according to data sheet section 6.
-var DefaultRFConfiguration = RFConfiguration{
+var defaultConfiguration = []byte{
 	RegOpMode:         0x01,
 	RegBitrateMsb:     0x1A,
 	RegBitrateLsb:     0x0B,
@@ -299,9 +237,9 @@ var DefaultRFConfiguration = RFConfiguration{
 	RegOokPeak:        0x28,
 	RegOokFix:         0x0C,
 	RegOokAvg:         0x12,
-	reserved17:        0x47,
-	reserved18:        0x32,
-	reserved19:        0x3E,
+	0x17:              0x47, // reserved
+	0x18:              0x32, // reserved
+	0x19:              0x3E, // reserved
 	RegAfcFei:         0x00,
 	RegAfcMsb:         0x00,
 	RegAfcLsb:         0x00,
@@ -345,6 +283,11 @@ var DefaultRFConfiguration = RFConfiguration{
 	RegVersion:        0x12,
 }
 
+// DefaultConfiguration returns a copy of the default (recommended) values.
+func DefaultConfiguration() []byte {
+	return defaultConfiguration[:]
+}
+
 // RegOpMode
 const (
 	FskOokMode = 0 << 7
@@ -361,6 +304,35 @@ const (
 	TransmitterMode = 3
 	FreqSynthModeRX = 4
 	ReceiverMode    = 5
+)
+
+// RegPaConfig
+const (
+	PaBoost          = 1 << 7
+	OutputPowerShift = 0
+)
+
+// RegPaRamp
+const (
+	ModulationShapingNone   = 0 << 5
+	ModulationShapingNarrow = 1 << 5
+	ModulationShapingWide   = 2 << 5
+	PaRamp3_4ms             = 0x0
+	PaRamp2ms               = 0x1
+	PaRamp1ms               = 0x2
+	PaRamp500μs             = 0x3
+	PaRamp250μs             = 0x4
+	PaRamp125μs             = 0x5
+	PaRamp100μs             = 0x6
+	PaRamp62μs              = 0x7
+	PaRamp50μs              = 0x8
+	PaRamp40μs              = 0x9
+	PaRamp31μs              = 0xA
+	PaRamp25μs              = 0xB
+	PaRamp20μs              = 0xC
+	PaRamp15μs              = 0xD
+	PaRamp12μs              = 0xE
+	PaRamp10μs              = 0xF
 )
 
 // RegLna
@@ -417,14 +389,19 @@ const (
 
 // RegFifoThresh
 const (
-	TxStartCondition = 1 << 7
+	TxStartCondition   = 1 << 7
+	FifoThresholdShift = 0
 )
 
 // RegSeqConfig1
 const (
 	SequencerStart           = 1 << 7
 	SequencerStop            = 1 << 6
+	IdleModeStandby          = 0 << 5
 	IdleModeSleep            = 1 << 5
+	FromStartToLowPower      = 0 << 3
+	FromStartToRX            = 1 << 3
+	FromStartToTX            = 2 << 3
 	FromStartToTXOnFifoLevel = 3 << 3
 )
 
@@ -466,4 +443,10 @@ const (
 	Dio5MappingShift  = 4
 	MapPreambleDetect = 1 << 0
 	MapRssi           = 0 << 0
+)
+
+// RegPaDac
+const (
+	PaDacDefault   = 0x04
+	PaDacPlus20dBm = 0x07
 )

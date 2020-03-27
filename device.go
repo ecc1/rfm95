@@ -2,6 +2,7 @@ package rfm95
 
 import (
 	"bytes"
+	"log"
 	"time"
 
 	"github.com/ecc1/gpio"
@@ -57,7 +58,6 @@ func (hwFlavor) WriteBurstAddress(addr byte) byte {
 // Radio represents an open radio device.
 type Radio struct {
 	hw            *radio.Hardware
-	resetPin      gpio.OutputPin
 	receiveBuffer bytes.Buffer
 	err           error
 }
@@ -65,18 +65,20 @@ type Radio struct {
 // Open opens the radio device.
 func Open() *Radio {
 	r := &Radio{hw: radio.Open(hwFlavor{})}
+	// NOTE: the RFM95 requires the reset pin to be in input mode
+	_, r.err = gpio.Input(resetPin, true)
+	if r.Error() != nil {
+		r.hw.Close()
+		return r
+	}
 	v := r.Version()
 	if r.Error() != nil {
+		r.hw.Close()
 		return r
 	}
 	if v != hwVersion {
 		r.hw.Close()
 		r.SetError(radio.HardwareVersionError{Actual: v, Expected: hwVersion})
-		return r
-	}
-	r.resetPin, r.err = gpio.Output(resetPin, false, false)
-	if r.Error() != nil {
-		r.hw.Close()
 	}
 	return r
 }
@@ -104,15 +106,15 @@ func (r *Radio) Version() uint16 {
 }
 
 // Reset resets the radio device.  See section 7.2.2 of data sheet.
+// NOTE: the RFM95 requires the reset pin to be in input mode
+// except while resetting the chip, unlike the RFM69 for example.
 func (r *Radio) Reset() {
-	if r.Error() != nil {
-		return
+	_, err := gpio.Output(resetPin, true, true)
+	if err != nil {
+		log.Printf("Reset: gpio.Output: %s", err)
 	}
-	r.sequencerStop()
-	r.setMode(SleepMode)
-	_ = r.resetPin.Write(true)
 	time.Sleep(100 * time.Microsecond)
-	r.err = r.resetPin.Write(false)
+	_, r.err = gpio.Input(resetPin, true)
 	time.Sleep(5 * time.Millisecond)
 }
 

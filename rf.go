@@ -3,7 +3,6 @@ package rfm95
 import (
 	"fmt"
 	"log"
-	"unsafe"
 )
 
 const (
@@ -11,55 +10,77 @@ const (
 	channelBW = 100000 // Hz
 )
 
-// Bytes returns the RFConfiguration as a byte slice.
-func (config *RFConfiguration) Bytes() []byte {
-	return (*[RegVersion - RegOpMode + 1]byte)(unsafe.Pointer(config))[:]
-}
-
-// ReadConfiguration reads the current RFConfiguration from the radio.
-func (r *Radio) ReadConfiguration() *RFConfiguration {
+// ReadConfiguration reads the current register configuration from the radio,
+// using either burst-mode or individual SPI reads.
+func (r *Radio) ReadConfiguration(useBurst bool) []byte {
 	if r.Error() != nil {
 		return nil
 	}
-	regs := r.hw.ReadBurst(RegOpMode, RegVersion-RegOpMode+1)
-	return (*RFConfiguration)(unsafe.Pointer(&regs[0]))
+	n := len(resetConfiguration)
+	config := make([]byte, n)
+	start := config[ConfigurationStart:]
+	if useBurst {
+		copy(start, r.hw.ReadBurst(ConfigurationStart, n-ConfigurationStart))
+		return config
+	}
+	for i := range start {
+		start[i] = r.hw.ReadRegister(uint8(ConfigurationStart + i))
+	}
+	return config
 }
 
-// WriteConfiguration writes the given RFConfiguration to the radio.
-func (r *Radio) WriteConfiguration(config *RFConfiguration) {
-	r.hw.WriteBurst(RegOpMode, config.Bytes())
+// WriteConfiguration writes the given register configuration to the radio,
+// using either burst-mode or individual SPI writes.
+func (r *Radio) WriteConfiguration(config []byte, useBurst bool) {
+	n := len(resetConfiguration)
+	if len(config) != n {
+		log.Panicf("WriteConfiguration: config length = %d, expected %d", len(config), n)
+		return
+	}
+	start := config[ConfigurationStart:]
+	if useBurst {
+		r.hw.WriteBurst(ConfigurationStart, start)
+		return
+	}
+	for i, v := range start {
+		r.hw.WriteRegister(uint8(ConfigurationStart+i), v)
+	}
 }
 
 // InitRF initializes the radio to communicate with
 // a Medtronic insulin pump at the given frequency.
 func (r *Radio) InitRF(frequency uint32) {
-	rf := DefaultRFConfiguration
-
-	rf.RegOpMode = FskOokMode | ModulationTypeOOK | SleepMode
-
-	// Use 2^(5+1) = 64 samples for RSSI.
-	rf.RegRssiConfig = 5
-
-	// Make sure enough preamble bytes are sent.
-	rf.RegPreambleMsb = 0x00
-	rf.RegPreambleLsb = 0x18
-
-	// Use 4 bytes for Sync word.
-	rf.RegSyncConfig = SyncOn | 3<<SyncSizeShift
-
-	// Sync word.
-	rf.RegSyncValue1 = 0xFF
-	rf.RegSyncValue2 = 0x00
-	rf.RegSyncValue3 = 0xFF
-	rf.RegSyncValue4 = 0x00
-
 	// Must be in Sleep mode first before changing to FSK/OOK mode.
-	r.hw.WriteRegister(RegOpMode, FskOokMode|ModulationTypeOOK|SleepMode)
-
-	r.WriteConfiguration(&rf)
+	r.setMode(SleepMode)
+	rf := DefaultConfiguration()
+	rf[RegOpMode] = FskOokMode | ModulationTypeOOK | SleepMode
+	// Interrupt on DIO2 when Sync word is seen.
+	rf[RegDioMapping1] = 3 << Dio2MappingShift
+	// Use 2^(5+1) = 64 samples for RSSI.
+	rf[RegRssiConfig] = 5
+	// Make sure enough preamble bytes are sent.
+	rf[RegPreambleMsb] = 0x00
+	rf[RegPreambleLsb] = 0x18
+	// Use 4 bytes for Sync word.
+	rf[RegSyncConfig] = SyncOn | 3<<SyncSizeShift
+	// Sync word.
+	rf[RegSyncValue1] = 0xFF
+	rf[RegSyncValue2] = 0x00
+	rf[RegSyncValue3] = 0xFF
+	rf[RegSyncValue4] = 0x00
+	// Use unlimited length packet format (data sheet section 4.2.13.2).
+	rf[RegPacketConfig1] = FixedLength
+	rf[RegPayloadLength] = 0
+	rf[RegPacketConfig2] = PacketMode | 0
+	// Must use PA_BOOST pin on Adafruit RFM95 bonnet. This sets Pout = 3 dBm.
+	rf[RegPaConfig] = PaBoost | 1<<OutputPowerShift
+	rf[RegPaRamp] = ModulationShapingNarrow | PaRamp100μs
+	r.WriteConfiguration(rf, true)
 	r.SetFrequency(frequency)
 	r.SetBitrate(bitrate)
 	r.SetChannelBW(channelBW)
+	// RegPaDac is not in the DefaultConfiguration range, so set it individually.
+	r.hw.WriteRegister(RegPaDac, PaDacDefault)
 }
 
 // Frequency returns the radio's current frequency, in Hertz.
@@ -177,23 +198,19 @@ func (r *Radio) setMode(mode uint8) {
 	if cur&ModeMask == mode {
 		return
 	}
-	if verbose {
+	r.hw.WriteRegister(RegOpMode, cur&^ModeMask|mode)
+	if debug {
 		log.Printf("change from %s to %s", stateName(cur&ModeMask), stateName(mode))
 	}
-	r.hw.WriteRegister(RegOpMode, cur&^ModeMask|mode)
 	for r.Error() == nil {
 		s := r.mode()
-		if s == mode && r.modeReady() {
+		if s == mode {
 			break
 		}
-		if verbose {
+		if debug {
 			log.Printf("  %s", stateName(s))
 		}
 	}
-}
-
-func (r *Radio) modeReady() bool {
-	return r.hw.ReadRegister(RegIrqFlags1)&ModeReady != 0
 }
 
 // Sleep puts the radio into sleep mode.

@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	verbose       = false
+	debug         = false
 	maxPacketSize = 110
-	fifoSize      = 66
+	fifoSize      = 64
 
 	// The fifoThreshold value should allow a maximum-sized packet to be
 	// written in two bursts, but be large enough to avoid fifo underflow.
@@ -19,7 +19,7 @@ const (
 )
 
 func init() {
-	if verbose {
+	if debug {
 		log.SetFlags(log.Ltime | log.Lmicroseconds | log.LUTC)
 	}
 }
@@ -29,75 +29,69 @@ func (r *Radio) Send(data []byte) {
 	if r.Error() != nil {
 		return
 	}
-	count := len(data)
-	if count > maxPacketSize {
-		log.Panicf("attempting to send %d-byte packet", count)
+	if len(data) > maxPacketSize {
+		log.Panicf("attempting to send %d-byte packet", len(data))
 	}
-	if verbose {
-		log.Printf("sending %d-byte packet in %s state", count, r.State())
+	if debug {
+		log.Printf("sending %d-byte packet in %s state", len(data), r.State())
 	}
 	// Terminate packet with zero byte.
-	count++
-	packet := make([]byte, count)
+	packet := make([]byte, len(data)+1)
 	copy(packet, data)
-	// Change to Standby mode in case an earlier receive timeout left the radio in Receive mode.
-	r.setMode(StandbyMode)
 	r.clearFIFO()
-	// Automatically enter Transmit state on FifoLevel interrupt.
-	r.hw.WriteRegister(RegFifoThresh, TxStartCondition)
-	r.hw.WriteRegister(RegSeqConfig1, SequencerStart|IdleModeSleep|FromStartToTXOnFifoLevel)
-	// Specify fixed length packet format (including final zero byte)
-	// so PacketSent interrupt will terminate Transmit state.
-	r.hw.WriteRegister(RegPacketConfig1, FixedLength)
-	lengthMSB := uint8(count>>8) & PayloadLengthMSBMask
-	r.hw.WriteRegister(RegPacketConfig2, PacketMode|lengthMSB)
-	r.hw.WriteRegister(RegPayloadLength, uint8(count))
+	r.setMode(StandbyMode)
+	r.hw.WriteRegister(RegFifoThresh, TxStartCondition|fifoThreshold<<FifoThresholdShift)
+	// Use the sequencer to transmit the packet automatically.
+	r.hw.WriteRegister(RegSeqConfig1, SequencerStart|IdleModeStandby|FromStartToTX)
 	r.transmit(packet)
-	r.setMode(SleepMode)
+	r.setMode(StandbyMode)
 }
 
 func (r *Radio) transmit(data []byte) {
-	n := len(data)
-	if n > fifoSize {
-		n = fifoSize
-	}
-	if verbose {
-		log.Printf("writing %d bytes to TX FIFO\n", n)
-	}
-	r.hw.WriteBurst(RegFifo, data[:n])
-	data = data[n:]
+	avail := fifoSize
 	for r.Error() == nil {
+		if avail > len(data) {
+			avail = len(data)
+		}
+		if debug {
+			log.Printf("writing %d bytes to TX FIFO\n", avail)
+		}
+		r.hw.WriteBurst(RegFifo, data[:avail])
+		if debug {
+			log.Printf("in %s state after FIFO write", r.State())
+		}
+		data = data[avail:]
 		if len(data) == 0 {
 			break
 		}
-		r.waitForFifoNonEmpty()
-		r.hw.WriteRegister(RegFifo, data[0])
-		data = data[1:]
+		// Wait until there is room for at least fifoSize - fifoThreshold bytes in the FIFO.
+		// Err on the short side here to avoid TXFIFO underflow.
+		time.Sleep(fifoSize / 4 * byteDuration)
+		for r.Error() == nil {
+			if !r.fifoThresholdExceeded() {
+				avail = fifoSize - fifoThreshold
+				break
+			}
+		}
 	}
+	r.finishTX(avail)
+}
+
+func (r *Radio) finishTX(numBytes int) {
 	// Wait for automatic return to standby mode when FIFO is empty.
 	for r.Error() == nil {
 		s := r.mode()
 		if s == StandbyMode {
+			if debug {
+				log.Printf("transmit completed")
+			}
 			break
 		}
-		if verbose || s != TransmitterMode {
+		if debug || s != TransmitterMode {
 			log.Printf("waiting for TX to finish in %s state", stateName(s))
 		}
 		time.Sleep(byteDuration)
 	}
-	r.sequencerStop()
-	r.setMode(SleepMode)
-}
-
-func (r *Radio) waitForFifoNonEmpty() {
-	for r.Error() == nil {
-		if !r.fifoFull() {
-			return
-		}
-	}
-}
-func (r *Radio) sequencerStop() {
-	r.hw.WriteRegister(RegSeqConfig1, SequencerStop)
 }
 
 func (r *Radio) fifoEmpty() bool {
@@ -106,6 +100,10 @@ func (r *Radio) fifoEmpty() bool {
 
 func (r *Radio) fifoFull() bool {
 	return r.hw.ReadRegister(RegIrqFlags2)&FifoFull != 0
+}
+
+func (r *Radio) fifoThresholdExceeded() bool {
+	return r.hw.ReadRegister(RegIrqFlags2)&FifoLevel != 0
 }
 
 func (r *Radio) clearFIFO() {
@@ -121,9 +119,10 @@ func (r *Radio) Receive(timeout time.Duration) ([]byte, int) {
 	// Use unlimited length packet format (data sheet section 4.2.13.2).
 	r.hw.WriteRegister(RegPacketConfig1, FixedLength)
 	r.hw.WriteRegister(RegPayloadLength, 0)
+	r.hw.WriteRegister(RegPacketConfig2, PacketMode|0)
 	r.setMode(ReceiverMode)
 	defer r.setMode(SleepMode)
-	if verbose {
+	if debug {
 		log.Printf("waiting for interrupt in %s state", r.State())
 	}
 	r.hw.AwaitInterrupt(timeout)
@@ -151,7 +150,7 @@ func (r *Radio) Receive(timeout time.Duration) ([]byte, int) {
 }
 
 func (r *Radio) finishRX(rssi int) ([]byte, int) {
-	r.setMode(SleepMode)
+	r.setMode(StandbyMode)
 	r.clearFIFO()
 	size := r.receiveBuffer.Len()
 	if size == 0 {
@@ -169,7 +168,7 @@ func (r *Radio) finishRX(rssi int) ([]byte, int) {
 		log.Printf("end-of-packet glitch %X with RSSI %d", b, rssi)
 		p = p[:len(p)-1]
 	}
-	if verbose {
+	if debug {
 		log.Printf("received %d-byte packet in %s state", size, r.State())
 	}
 	return p, rssi

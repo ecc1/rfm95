@@ -36,8 +36,9 @@ func (r *Radio) Send(data []byte) {
 		log.Printf("sending %d-byte packet in %s state", len(data), r.State())
 	}
 	// Terminate packet with zero byte.
-	packet := make([]byte, len(data)+1)
-	copy(packet, data)
+	copy(r.txPacket, data)
+	r.txPacket[len(data)] = 0
+	packet := r.txPacket[:len(data)+1]
 	r.clearFIFO()
 	r.setMode(StandbyMode)
 	r.hw.WriteRegister(RegFifoThresh, TxStartCondition|fifoThreshold<<FifoThresholdShift)

@@ -59,6 +59,7 @@ func (hwFlavor) WriteBurstAddress(addr byte) byte {
 type Radio struct {
 	hw            *radio.Hardware
 	receiveBuffer bytes.Buffer
+	txPacket      []byte
 	err           error
 }
 
@@ -79,7 +80,9 @@ func Open() *Radio {
 	if v != hwVersion {
 		r.hw.Close()
 		r.SetError(radio.HardwareVersionError{Actual: v, Expected: hwVersion})
+		return r
 	}
+	r.txPacket = make([]byte, maxPacketSize+1)
 	return r
 }
 
